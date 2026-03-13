@@ -1,0 +1,6 @@
+.env
+.gocache/
+.gotmp/
+data/
+dist/
+meme-admin-bot

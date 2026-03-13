@@ -1,0 +1,11 @@
+services:
+  meme-admin-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meme-admin-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data

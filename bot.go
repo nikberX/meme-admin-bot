@@ -17,6 +17,15 @@ import (
 	"time"
 )
 
+type inlineKeyboardMarkup struct {
+	InlineKeyboard [][]inlineKeyboardButton `json:"inline_keyboard"`
+}
+
+type inlineKeyboardButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+
 type Bot struct {
 	cfg    Config
 	store  *Store
@@ -53,6 +62,12 @@ func (b *Bot) Run(ctx context.Context) error {
 
 		for _, update := range updates {
 			offset = update.UpdateID + 1
+			if update.CallbackQuery != nil {
+				if err := b.handleCallbackQuery(ctx, *update.CallbackQuery); err != nil {
+					b.logger.Printf("handle callback %d: %v", update.UpdateID, err)
+				}
+				continue
+			}
 			if update.Message == nil {
 				continue
 			}
@@ -76,7 +91,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg Message) error {
 	case text == "/start" || text == "/help":
 		return b.sendHelp(ctx, msg.Chat.ID)
 	case text == "/list":
-		return b.sendDraftList(ctx, msg.Chat.ID)
+		return b.sendDraftList(ctx, msg.Chat.ID, msg.From.ID)
 	case strings.HasPrefix(text, "/caption "):
 		return b.handleSetCaption(ctx, msg)
 	case strings.HasPrefix(text, "/source "):
@@ -96,6 +111,29 @@ func (b *Bot) handleMessage(ctx context.Context, msg Message) error {
 	}
 
 	return b.sendText(ctx, msg.Chat.ID, "Не понял сообщение. Отправь ссылку, фото, видео или документ с медиа. /help")
+}
+
+func (b *Bot) handleCallbackQuery(ctx context.Context, cb CallbackQuery) error {
+	if cb.From == nil {
+		return nil
+	}
+	if !b.isOwner(*cb.From) {
+		return b.answerCallbackQuery(ctx, cb.ID, "Недостаточно прав")
+	}
+	switch {
+	case strings.HasPrefix(cb.Data, "publish:"):
+		draftID := strings.TrimPrefix(cb.Data, "publish:")
+		if err := b.publishDraftByID(ctx, draftID); err != nil {
+			_ = b.answerCallbackQuery(ctx, cb.ID, "Ошибка публикации")
+			if cb.Message != nil {
+				return b.sendText(ctx, cb.Message.Chat.ID, "Публикация не удалась: "+err.Error())
+			}
+			return err
+		}
+		return b.answerCallbackQuery(ctx, cb.ID, "Опубликовано")
+	default:
+		return b.answerCallbackQuery(ctx, cb.ID, "Неизвестное действие")
+	}
 }
 
 func (b *Bot) isOwner(user User) bool {
@@ -140,7 +178,7 @@ func (b *Bot) handleURLDraft(ctx context.Context, msg Message, rawURL string) er
 	if err := b.store.SaveDraft(draft); err != nil {
 		return err
 	}
-	return b.sendText(ctx, msg.Chat.ID, formatDraftReadyMessage(draft))
+	return b.sendTextWithKeyboard(ctx, msg.Chat.ID, formatDraftReadyMessage(draft), draftKeyboard(draft))
 }
 
 func (b *Bot) handleTelegramMediaDraft(ctx context.Context, msg Message) error {
@@ -172,7 +210,7 @@ func (b *Bot) handleTelegramMediaDraft(ctx context.Context, msg Message) error {
 	if err := b.store.SaveDraft(draft); err != nil {
 		return err
 	}
-	return b.sendText(ctx, msg.Chat.ID, formatDraftReadyMessage(draft))
+	return b.sendTextWithKeyboard(ctx, msg.Chat.ID, formatDraftReadyMessage(draft), draftKeyboard(draft))
 }
 
 func (b *Bot) handleSetCaption(ctx context.Context, msg Message) error {
@@ -212,12 +250,19 @@ func (b *Bot) handlePublish(ctx context.Context, msg Message) error {
 	if len(parts) != 2 {
 		return b.sendText(ctx, msg.Chat.ID, "Формат: /publish <draft_id>")
 	}
-	draft, found := b.store.GetDraft(parts[1])
+	if err := b.publishDraftByID(ctx, parts[1]); err != nil {
+		return b.sendText(ctx, msg.Chat.ID, "Публикация не удалась: "+err.Error())
+	}
+	return b.sendText(ctx, msg.Chat.ID, "Опубликовано в канал: "+parts[1])
+}
+
+func (b *Bot) publishDraftByID(ctx context.Context, draftID string) error {
+	draft, found := b.store.GetDraft(draftID)
 	if !found {
-		return b.sendText(ctx, msg.Chat.ID, "Черновик не найден.")
+		return fmt.Errorf("черновик не найден")
 	}
 	if draft.Status == DraftPublished {
-		return b.sendText(ctx, msg.Chat.ID, "Этот черновик уже опубликован.")
+		return fmt.Errorf("этот черновик уже опубликован")
 	}
 
 	caption := buildCaption(draft)
@@ -225,7 +270,7 @@ func (b *Bot) handlePublish(ctx context.Context, msg Message) error {
 		draft.Status = DraftFailed
 		draft.ErrorMessage = err.Error()
 		_ = b.store.SaveDraft(draft)
-		return b.sendText(ctx, msg.Chat.ID, "Публикация не удалась: "+err.Error())
+		return err
 	}
 
 	now := time.Now().UTC()
@@ -235,7 +280,7 @@ func (b *Bot) handlePublish(ctx context.Context, msg Message) error {
 	if err := b.store.SaveDraft(draft); err != nil {
 		return err
 	}
-	return b.sendText(ctx, msg.Chat.ID, "Опубликовано в канал: "+draft.ID)
+	return nil
 }
 
 func (b *Bot) handleDelete(ctx context.Context, msg Message) error {
@@ -277,8 +322,8 @@ func (b *Bot) sendHelp(ctx context.Context, chatID int64) error {
 	return b.sendText(ctx, chatID, help)
 }
 
-func (b *Bot) sendDraftList(ctx context.Context, chatID int64) error {
-	drafts := b.store.ListDrafts(b.cfg.OwnerUserID)
+func (b *Bot) sendDraftList(ctx context.Context, chatID, ownerUserID int64) error {
+	drafts := b.store.ListDrafts(ownerUserID)
 	if len(drafts) == 0 {
 		return b.sendText(ctx, chatID, "Черновиков пока нет.")
 	}
@@ -323,11 +368,31 @@ func (b *Bot) getUpdates(ctx context.Context, offset int64) ([]Update, error) {
 }
 
 func (b *Bot) sendText(ctx context.Context, chatID int64, text string) error {
+	return b.sendTextWithKeyboard(ctx, chatID, text, nil)
+}
+
+func (b *Bot) sendTextWithKeyboard(ctx context.Context, chatID int64, text string, keyboard *inlineKeyboardMarkup) error {
 	form := url.Values{}
 	form.Set("chat_id", fmt.Sprintf("%d", chatID))
 	form.Set("text", text)
 	form.Set("disable_web_page_preview", "true")
+	if keyboard != nil {
+		payload, err := json.Marshal(keyboard)
+		if err != nil {
+			return err
+		}
+		form.Set("reply_markup", string(payload))
+	}
 	return b.postForm(ctx, "/sendMessage", form)
+}
+
+func (b *Bot) answerCallbackQuery(ctx context.Context, callbackID, text string) error {
+	form := url.Values{}
+	form.Set("callback_query_id", callbackID)
+	if text != "" {
+		form.Set("text", text)
+	}
+	return b.postForm(ctx, "/answerCallbackQuery", form)
 }
 
 func (b *Bot) postForm(ctx context.Context, method string, form url.Values) error {
@@ -512,6 +577,19 @@ func formatDraftReadyMessage(d Draft) string {
 	lines = append(lines, fmt.Sprintf("/source %s https://example.com/source", d.ID))
 	lines = append(lines, fmt.Sprintf("/publish %s", d.ID))
 	return strings.Join(lines, "\n")
+}
+
+func draftKeyboard(d Draft) *inlineKeyboardMarkup {
+	return &inlineKeyboardMarkup{
+		InlineKeyboard: [][]inlineKeyboardButton{
+			{
+				{
+					Text:         "Publish",
+					CallbackData: "publish:" + d.ID,
+				},
+			},
+		},
+	}
 }
 
 func buildCaption(d Draft) string {

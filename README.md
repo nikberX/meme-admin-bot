@@ -63,7 +63,8 @@ cp .env.example .env
 
 ```env
 BOT_TOKEN=123456:telegram-bot-token
-OWNER_USER_ID=123456789
+OWNER_USER_ID=
+OWNER_USERNAME=telegram_username
 CHANNEL_ID=@my_memes_channel
 DATA_DIR=/app/data
 TEMP_DIR=/app/data/tmp
@@ -111,7 +112,22 @@ docker compose up -d --build
 
 Именно это значение нужно записать в `BOT_TOKEN`.
 
-### 2. Узнайте свой `OWNER_USER_ID`
+### 2. Укажите владельца бота
+
+Можно использовать один из двух вариантов:
+
+- `OWNER_USER_ID` - numeric Telegram user id
+- `OWNER_USERNAME` - Telegram username без `@`
+
+Если не хотите сейчас искать numeric id, просто укажите ваш username.
+
+Пример:
+
+```env
+OWNER_USERNAME=nikberX
+```
+
+Если хотите использовать numeric id:
 
 Это ваш личный Telegram user id. Бот будет принимать команды только от него.
 
@@ -244,7 +260,7 @@ go run .
 
 ## Практические замечания
 
-- `OWNER_USER_ID` ограничивает управление ботом одним Telegram user id.
+- `OWNER_USER_ID` или `OWNER_USERNAME` ограничивает управление ботом владельцем.
 - `CHANNEL_ID` можно задать как `@channel_username` или numeric chat id.
 - Бот использует long polling, webhook не нужен.
 - Для URL-импорта доступность конкретной платформы зависит от того, поддерживает ли ее установленный `yt-dlp`.

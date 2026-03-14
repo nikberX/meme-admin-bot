@@ -67,7 +67,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg Message) error {
 	if msg.From == nil {
 		return nil
 	}
-	if msg.From.ID != b.cfg.OwnerUserID {
+	if !b.isOwner(*msg.From) {
 		return b.sendText(ctx, msg.Chat.ID, "Этот бот принимает команды только от владельца.")
 	}
 
@@ -96,6 +96,16 @@ func (b *Bot) handleMessage(ctx context.Context, msg Message) error {
 	}
 
 	return b.sendText(ctx, msg.Chat.ID, "Не понял сообщение. Отправь ссылку, фото, видео или документ с медиа. /help")
+}
+
+func (b *Bot) isOwner(user User) bool {
+	if b.cfg.OwnerUserID != 0 && user.ID == b.cfg.OwnerUserID {
+		return true
+	}
+	if b.cfg.OwnerUsername != "" && normalizeTelegramUsername(user.Username) == b.cfg.OwnerUsername {
+		return true
+	}
+	return false
 }
 
 func (b *Bot) handleURLDraft(ctx context.Context, msg Message, rawURL string) error {

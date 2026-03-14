@@ -102,7 +102,11 @@ func (b *Bot) isOwner(user User) bool {
 	if b.cfg.OwnerUserID != 0 && user.ID == b.cfg.OwnerUserID {
 		return true
 	}
-	if b.cfg.OwnerUsername != "" && normalizeTelegramUsername(user.Username) == b.cfg.OwnerUsername {
+	username := normalizeTelegramUsername(user.Username)
+	if b.cfg.OwnerUsername != "" && username == b.cfg.OwnerUsername {
+		return true
+	}
+	if _, ok := b.cfg.OwnerUsernames[username]; ok {
 		return true
 	}
 	return false

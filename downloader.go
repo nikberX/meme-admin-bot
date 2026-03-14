@@ -31,8 +31,15 @@ func DownloadByURL(ctx context.Context, cfg Config, store *Store, rawURL string)
 		"--output", outputTemplate,
 		"--format", "bv*+ba/b",
 		"--merge-output-format", "mp4",
-		rawURL,
+		"--sleep-requests", fmt.Sprintf("%d", cfg.YtDLPSleepSeconds),
+		"--sleep-interval", fmt.Sprintf("%d", cfg.YtDLPSleepSeconds),
+		"--max-sleep-interval", fmt.Sprintf("%d", cfg.YtDLPSleepSeconds+2),
+		"--extractor-args", "youtube:player_client=android,web",
 	}
+	if len(cfg.YtDLPExtraArgs) > 0 {
+		args = append(args, cfg.YtDLPExtraArgs...)
+	}
+	args = append(args, rawURL)
 	cmd := exec.CommandContext(ctx, cfg.YtDLPBinary, args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	output, err := cmd.CombinedOutput()

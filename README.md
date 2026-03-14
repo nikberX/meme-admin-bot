@@ -65,10 +65,13 @@ cp .env.example .env
 BOT_TOKEN=123456:telegram-bot-token
 OWNER_USER_ID=
 OWNER_USERNAME=telegram_username
+OWNER_USERNAMES=telegram_username,another_username
 CHANNEL_ID=@my_memes_channel
 DATA_DIR=/app/data
 TEMP_DIR=/app/data/tmp
 YT_DLP_BINARY=yt-dlp
+YT_DLP_EXTRA_ARGS=
+YT_DLP_SLEEP_SECONDS=3
 FFMPEG_BINARY=ffmpeg
 ```
 
@@ -114,10 +117,11 @@ docker compose up -d --build
 
 ### 2. Укажите владельца бота
 
-Можно использовать один из двух вариантов:
+Можно использовать один из трех вариантов:
 
 - `OWNER_USER_ID` - numeric Telegram user id
 - `OWNER_USERNAME` - Telegram username без `@`
+- `OWNER_USERNAMES` - список Telegram username через запятую
 
 Если не хотите сейчас искать numeric id, просто укажите ваш username.
 
@@ -125,6 +129,12 @@ docker compose up -d --build
 
 ```env
 OWNER_USERNAME=nikberX
+```
+
+Для нескольких владельцев:
+
+```env
+OWNER_USERNAMES=nikberX,nimperia
 ```
 
 Если хотите использовать numeric id:
@@ -258,9 +268,23 @@ go run .
 - Бот рассчитан на одного владельца через `OWNER_USER_ID`.
 - Нет очереди отложенной публикации и автопостинга по расписанию.
 
+## YouTube замечания
+
+YouTube иногда rate-limit'ит серверный IP. Если бот отвечает ошибкой вида `This content isn't available, try again later`, это почти всегда ограничение со стороны YouTube, а не ошибка Telegram или Go-кода.
+
+Что уже включено в проект:
+
+- `yt-dlp` запускается с задержкой между запросами
+- в контейнере установлен `nodejs` для JS runtime
+
+Что помогает дополнительно:
+
+- подождать 30-60 минут после rate limit
+- сменить IP или использовать прокси
+
 ## Практические замечания
 
-- `OWNER_USER_ID` или `OWNER_USERNAME` ограничивает управление ботом владельцем.
+- `OWNER_USER_ID`, `OWNER_USERNAME` или `OWNER_USERNAMES` ограничивает управление ботом владельцами.
 - `CHANNEL_ID` можно задать как `@channel_username` или numeric chat id.
 - Бот использует long polling, webhook не нужен.
 - Для URL-импорта доступность конкретной платформы зависит от того, поддерживает ли ее установленный `yt-dlp`.

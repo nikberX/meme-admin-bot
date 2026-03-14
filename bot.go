@@ -46,6 +46,7 @@ func NewBot(cfg Config, store *Store, logger *log.Logger) *Bot {
 
 func (b *Bot) Run(ctx context.Context) error {
 	var offset int64
+	nextCleanup := time.Now().UTC()
 	for {
 		select {
 		case <-ctx.Done():
@@ -74,6 +75,13 @@ func (b *Bot) Run(ctx context.Context) error {
 			if err := b.handleMessage(ctx, *update.Message); err != nil {
 				b.logger.Printf("handle update %d: %v", update.UpdateID, err)
 			}
+		}
+
+		if time.Now().UTC().After(nextCleanup) {
+			if err := b.cleanupDraftMedia(); err != nil {
+				b.logger.Printf("cleanup error: %v", err)
+			}
+			nextCleanup = time.Now().UTC().Add(1 * time.Hour)
 		}
 	}
 }
@@ -131,6 +139,21 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, cb CallbackQuery) error {
 			return err
 		}
 		return b.answerCallbackQuery(ctx, cb.ID, "Опубликовано")
+	case strings.HasPrefix(cb.Data, "discard:"):
+		draftID := strings.TrimPrefix(cb.Data, "discard:")
+		if err := b.discardDraftByID(draftID); err != nil {
+			_ = b.answerCallbackQuery(ctx, cb.ID, "Ошибка удаления")
+			if cb.Message != nil {
+				return b.sendText(ctx, cb.Message.Chat.ID, "Не удалось удалить черновик: "+err.Error())
+			}
+			return err
+		}
+		if cb.Message != nil {
+			if err := b.deleteMessage(ctx, cb.Message.Chat.ID, cb.Message.MessageID); err != nil {
+				b.logger.Printf("delete draft message: %v", err)
+			}
+		}
+		return b.answerCallbackQuery(ctx, cb.ID, "Черновик удален")
 	default:
 		return b.answerCallbackQuery(ctx, cb.ID, "Неизвестное действие")
 	}
@@ -277,10 +300,26 @@ func (b *Bot) publishDraftByID(ctx context.Context, draftID string) error {
 	draft.Status = DraftPublished
 	draft.PublishedAt = &now
 	draft.ErrorMessage = ""
+	if err := b.removeDraftMedia(&draft); err != nil {
+		b.logger.Printf("cleanup published draft media %s: %v", draft.ID, err)
+	}
 	if err := b.store.SaveDraft(draft); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (b *Bot) discardDraftByID(draftID string) error {
+	draft, found := b.store.GetDraft(draftID)
+	if !found {
+		return fmt.Errorf("черновик не найден")
+	}
+	if err := b.removeDraftMedia(&draft); err != nil {
+		return err
+	}
+	draft.Status = DraftFailed
+	draft.ErrorMessage = "discarded by user"
+	return b.store.SaveDraft(draft)
 }
 
 func (b *Bot) handleDelete(ctx context.Context, msg Message) error {
@@ -295,6 +334,7 @@ func (b *Bot) handleDelete(ctx context.Context, msg Message) error {
 	if err := os.Remove(draft.LocalPath); err != nil && !os.IsNotExist(err) {
 		return b.sendText(ctx, msg.Chat.ID, "Не удалось удалить файл: "+err.Error())
 	}
+	draft.LocalPath = ""
 	draft.Status = DraftFailed
 	draft.ErrorMessage = "deleted by user"
 	if err := b.store.SaveDraft(draft); err != nil {
@@ -393,6 +433,13 @@ func (b *Bot) answerCallbackQuery(ctx context.Context, callbackID, text string) 
 		form.Set("text", text)
 	}
 	return b.postForm(ctx, "/answerCallbackQuery", form)
+}
+
+func (b *Bot) deleteMessage(ctx context.Context, chatID, messageID int64) error {
+	form := url.Values{}
+	form.Set("chat_id", fmt.Sprintf("%d", chatID))
+	form.Set("message_id", fmt.Sprintf("%d", messageID))
+	return b.postForm(ctx, "/deleteMessage", form)
 }
 
 func (b *Bot) postForm(ctx context.Context, method string, form url.Values) error {
@@ -587,6 +634,10 @@ func draftKeyboard(d Draft) *inlineKeyboardMarkup {
 					Text:         "Publish",
 					CallbackData: "publish:" + d.ID,
 				},
+				{
+					Text:         "Discard",
+					CallbackData: "discard:" + d.ID,
+				},
 			},
 		},
 	}
@@ -598,13 +649,47 @@ func buildCaption(d Draft) string {
 		parts = append(parts, strings.TrimSpace(d.Caption))
 	}
 	source := strings.TrimSpace(d.SourceLabel)
-	if source == "" {
-		source = strings.TrimSpace(d.SourceURL)
-	}
 	if source != "" {
 		parts = append(parts, "Источник: "+source)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func (b *Bot) cleanupDraftMedia() error {
+	now := time.Now().UTC()
+	drafts := b.store.ListAllDrafts()
+	for _, draft := range drafts {
+		switch {
+		case draft.Status == DraftPublished && draft.LocalPath != "":
+			if err := b.removeDraftMedia(&draft); err != nil {
+				return err
+			}
+			if err := b.store.SaveDraft(draft); err != nil {
+				return err
+			}
+		case draft.Status == DraftReady && draft.LocalPath != "" && now.Sub(draft.CreatedAt) > 72*time.Hour:
+			if err := b.removeDraftMedia(&draft); err != nil {
+				return err
+			}
+			draft.Status = DraftFailed
+			draft.ErrorMessage = "expired after 72h without publish"
+			if err := b.store.SaveDraft(draft); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (b *Bot) removeDraftMedia(draft *Draft) error {
+	if draft.LocalPath == "" {
+		return nil
+	}
+	if err := os.Remove(draft.LocalPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	draft.LocalPath = ""
+	return nil
 }
 
 func splitCommandArg(text string) (id, value string, ok bool) {

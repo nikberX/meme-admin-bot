@@ -76,6 +76,19 @@ func (s *Store) ListDrafts(ownerUserID int64) []Draft {
 	return out
 }
 
+func (s *Store) ListAllDrafts() []Draft {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Draft, 0, len(s.drafts))
+	for _, d := range s.drafts {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out
+}
+
 func (s *Store) NextDraftID() string {
 	return fmt.Sprintf("m%v", time.Now().UnixNano())
 }

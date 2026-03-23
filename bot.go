@@ -201,7 +201,11 @@ func (b *Bot) handleURLDraft(ctx context.Context, msg Message, rawURL string) er
 	if err := b.store.SaveDraft(draft); err != nil {
 		return err
 	}
-	return b.sendTextWithKeyboard(ctx, msg.Chat.ID, formatDraftReadyMessage(draft), draftKeyboard(draft))
+	if err := b.sendDraftReadyPreview(ctx, msg.Chat.ID, draft); err != nil {
+		b.logger.Printf("send draft preview %s: %v", draft.ID, err)
+		return b.sendTextWithKeyboard(ctx, msg.Chat.ID, formatDraftReadyMessage(draft), draftKeyboard(draft))
+	}
+	return nil
 }
 
 func (b *Bot) handleTelegramMediaDraft(ctx context.Context, msg Message) error {
@@ -518,6 +522,14 @@ func (b *Bot) downloadTelegramFile(ctx context.Context, fileID, originalName str
 }
 
 func (b *Bot) sendMediaToChannel(ctx context.Context, draft Draft, caption string) error {
+	return b.sendLocalMedia(ctx, b.cfg.ChannelID, draft, caption, nil)
+}
+
+func (b *Bot) sendDraftReadyPreview(ctx context.Context, chatID int64, draft Draft) error {
+	return b.sendLocalMedia(ctx, fmt.Sprintf("%d", chatID), draft, formatDraftReadyMessage(draft), draftKeyboard(draft))
+}
+
+func (b *Bot) sendLocalMedia(ctx context.Context, chatID string, draft Draft, caption string, keyboard *inlineKeyboardMarkup) error {
 	file, err := os.Open(draft.LocalPath)
 	if err != nil {
 		return err
@@ -526,11 +538,20 @@ func (b *Bot) sendMediaToChannel(ctx context.Context, draft Draft, caption strin
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	if err := writer.WriteField("chat_id", b.cfg.ChannelID); err != nil {
+	if err := writer.WriteField("chat_id", chatID); err != nil {
 		return err
 	}
 	if caption != "" {
-		if err := writer.WriteField("caption", caption); err != nil {
+		if err := writer.WriteField("caption", clipCaption(caption, 1024)); err != nil {
+			return err
+		}
+	}
+	if keyboard != nil {
+		payload, err := json.Marshal(keyboard)
+		if err != nil {
+			return err
+		}
+		if err := writer.WriteField("reply_markup", string(payload)); err != nil {
 			return err
 		}
 	}
@@ -579,6 +600,16 @@ func (b *Bot) sendMediaToChannel(ctx context.Context, draft Draft, caption strin
 		return fmt.Errorf("telegram publish error: %s", payload.Description)
 	}
 	return nil
+}
+
+func clipCaption(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
 }
 
 func (b *Bot) moveIntoStore(tempPath, originalName string) (string, error) {
